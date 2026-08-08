@@ -593,7 +593,12 @@ Regole:
     try{ return localStorage.getItem(GROQ_KEY_STORAGE) || ''; }catch(e){ return ''; }
   }
   function setGroqKey(k){
-    try{ localStorage.setItem(GROQ_KEY_STORAGE, k); }catch(e){}
+    try{
+      localStorage.setItem(GROQ_KEY_STORAGE, k);
+      return localStorage.getItem(GROQ_KEY_STORAGE) === k;
+    }catch(e){
+      return false;
+    }
   }
 
   async function callGroq(userText, existingSpec){
@@ -741,7 +746,11 @@ Regole:
   document.getElementById('key-save').addEventListener('click', ()=>{
     const k = keyInput.value.trim();
     if(!k){ showToast('Inserisci una chiave valida', true); return; }
-    setGroqKey(k);
+    const ok = setGroqKey(k);
+    if(!ok){
+      showToast('Impossibile salvare: apri in Safari', true);
+      return;
+    }
     closeKeyModal();
     showToast('CHIAVE SALVATA');
     if(pendingText){
