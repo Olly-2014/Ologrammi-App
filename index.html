@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>HOLO // Visualizzatore Olografico</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root{
+    --cyan: #4df3ff;
+    --cyan-dim: #1c5f66;
+    --amber: #ffb84d;
+    --bg: #030608;
+    --panel: rgba(6,18,22,0.72);
+    --line: rgba(77,243,255,0.25);
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{
+    margin:0; padding:0; width:100%; height:100%; overflow:hidden;
+    background:var(--bg);
+    font-family:'SF Mono','Courier New',monospace;
+    color:var(--cyan);
+    -webkit-font-smoothing:antialiased;
+  }
+  #canvas-wrap{position:fixed; inset:0;}
+  canvas{display:block; touch-action:none;}
+
+  /* scanline / vignette overlay */
+  #overlay{
+    position:fixed; inset:0; pointer-events:none; z-index:5;
+    background:
+      radial-gradient(ellipse at center, rgba(0,0,0,0) 40%, rgba(0,0,0,0.55) 100%),
+      repeating-linear-gradient(0deg, rgba(77,243,255,0.035) 0px, rgba(77,243,255,0.035) 1px, transparent 1px, transparent 3px);
+    mix-blend-mode:screen;
+  }
+  #noise-flicker{
+    position:fixed; inset:0; pointer-events:none; z-index:6;
+    background:rgba(77,243,255,0.02);
+    animation:flicker 6s infinite;
+  }
+  @keyframes flicker{
+    0%,93%,100%{opacity:0;}
+    94%{opacity:1;}
+    95%{opacity:0;}
+    96%{opacity:0.6;}
+    97%{opacity:0;}
+  }
+
+  /* top HUD */
+  #hud-top{
+    position:fixed; top:0; left:0; right:0; z-index:10;
+    padding:calc(env(safe-area-inset-top,0px) + 14px) 16px 10px;
+    display:flex; justify-content:space-between; align-items:flex-start;
+    pointer-events:none;
+  }
+  .brand{
+    font-size:11px; letter-spacing:3px; color:var(--cyan);
+    text-shadow:0 0 8px rgba(77,243,255,0.6);
+    opacity:0.85;
+  }
+  .brand small{display:block; font-size:8px; letter-spacing:2px; color:var(--cyan-dim); margin-top:2px;}
+  .status{
+    font-size:9px; letter-spacing:1.5px; text-align:right; opacity:0.6; line-height:1.6;
+  }
+  .status .dot{display:inline-block; width:5px; height:5px; border-radius:50%; background:var(--cyan); margin-right:5px; box-shadow:0 0 6px var(--cyan);}
+
+  /* corner brackets */
+  .bracket{position:fixed; width:22px; height:22px; border-color:var(--line); z-index:9; pointer-events:none;}
+  .bracket.tl{top:8px; left:8px; border-top:1px solid; border-left:1px solid;}
+  .bracket.tr{top:8px; right:8px; border-top:1px solid; border-right:1px solid;}
+  .bracket.bl{bottom:8px; left:8px; border-bottom:1px solid; border-left:1px solid;}
+  .bracket.br{bottom:8px; right:8px; border-bottom:1px solid; border-right:1px solid;}
+
+  /* empty state */
+  #empty-state{
+    position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    z-index:4; text-align:center; padding:0 40px; pointer-events:none;
+  }
+  #empty-state.hidden{display:none;}
+  #empty-state h1{
+    font-size:13px; letter-spacing:4px; font-weight:400; color:var(--cyan);
+    text-shadow:0 0 12px rgba(77,243,255,0.5);
+    margin:0 0 10px;
+  }
+  #empty-state p{
+    font-size:11px; letter-spacing:1px; color:rgba(77,243,255,0.4); line-height:1.7; max-width:260px; margin:0;
+  }
+  .ring{
+    width:96px; height:96px; border-radius:50%;
+    border:1px solid var(--line);
+    margin-bottom:22px;
+    position:relative;
+    animation:spin 12s linear infinite;
+  }
+  .ring::before, .ring::after{
+    content:''; position:absolute; border-radius:50%; border:1px solid var(--line);
+  }
+  .ring::before{inset:14px; animation:spin 8s linear infinite reverse;}
+  .ring::after{inset:28px; border-color:rgba(255,184,77,0.3);}
+  @keyframes spin{from{transform:rotate(0deg)} to{transform:rotate(360deg)}}
+
+  /* label for object */
+  #obj-label{
+    position:fixed; left:50%; transform:translateX(-50%); z-index:8;
+    top:calc(env(safe-area-inset-top,0px) + 62px);
+    text-align:center; pointer-events:none; opacity:0; transition:opacity .5s;
+  }
+  #obj-label.show{opacity:1;}
+  #obj-label .name{font-size:13px; letter-spacing:3px; text-shadow:0 0 10px rgba(77,243,255,0.7);}
+  #obj-label .meta{font-size:9px; letter-spacing:1.5px; color:rgba(77,243,255,0.45); margin-top:4px;}
+
+  /* bottom console */
+  #console{
+    position:fixed; left:0; right:0; bottom:0; z-index:20;
+    padding:14px 14px calc(env(safe-area-inset-bottom,0px) + 14px);
+    background:linear-gradient(to top, rgba(3,8,10,0.95) 40%, rgba(3,8,10,0));
+  }
+  .quick-row{
+    display:flex; gap:8px; overflow-x:auto; margin-bottom:10px;
+    -webkit-overflow-scrolling:touch; scrollbar-width:none;
+  }
+  .quick-row::-webkit-scrollbar{display:none;}
+  .chip{
+    flex:0 0 auto; padding:7px 13px; border:1px solid var(--line); border-radius:20px;
+    font-size:10px; letter-spacing:1px; color:var(--cyan); background:rgba(77,243,255,0.05);
+    white-space:nowrap;
+  }
+  .chip:active{background:rgba(77,243,255,0.18);}
+
+  .input-bar{
+    display:flex; align-items:center; gap:8px;
+    background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:6px 6px 6px 14px; backdrop-filter:blur(10px);
+  }
+  .input-bar.busy{border-color:rgba(255,184,77,0.5);}
+  #prompt-input{
+    flex:1; background:none; border:none; outline:none; color:#eafdff;
+    font-family:inherit; font-size:16px; letter-spacing:0.3px; padding:8px 0;
+  }
+  #prompt-input::placeholder{color:rgba(77,243,255,0.35);}
+  #send-btn{
+    flex:0 0 auto; width:38px; height:38px; border-radius:10px; border:1px solid var(--line);
+    background:rgba(77,243,255,0.1); color:var(--cyan); display:flex; align-items:center; justify-content:center;
+  }
+  #send-btn:active{background:rgba(77,243,255,0.3);}
+  #send-btn svg{width:16px; height:16px;}
+  #send-btn.disabled{opacity:0.3;}
+
+  .mode-tabs{display:flex; gap:6px; margin-bottom:10px;}
+  .mode-tab{
+    font-size:9px; letter-spacing:1.5px; padding:5px 10px; border:1px solid transparent; border-radius:8px;
+    color:rgba(77,243,255,0.4);
+  }
+  .mode-tab.active{color:var(--cyan); border-color:var(--line); background:rgba(77,243,255,0.06);}
+
+  /* loading bar */
+  #load-bar{
+    position:fixed; top:0; left:0; height:2px; background:var(--amber); z-index:30;
+    box-shadow:0 0 8px var(--amber); width:0%; transition:width 0.3s;
+  }
+
+  /* action buttons for existing object */
+  #obj-actions{
+    position:fixed; right:14px; z-index:8; display:flex; flex-direction:column; gap:10px;
+    top:50%; transform:translateY(-50%); opacity:0; transition:opacity .4s; pointer-events:none;
+  }
+  #obj-actions.show{opacity:1; pointer-events:auto;}
+  .act-btn{
+    width:38px; height:38px; border-radius:50%; border:1px solid var(--line);
+    background:rgba(6,18,22,0.7); display:flex; align-items:center; justify-content:center;
+    backdrop-filter:blur(6px);
+  }
+  .act-btn svg{width:16px; height:16px; stroke:var(--cyan);}
+  .act-btn:active{background:rgba(77,243,255,0.2);}
+
+  #toast{
+    position:fixed; top:calc(env(safe-area-inset-top,0px) + 50px); left:50%; transform:translateX(-50%) translateY(-10px);
+    z-index:40; background:rgba(6,18,22,0.9); border:1px solid var(--line); border-radius:10px;
+    padding:9px 16px; font-size:10px; letter-spacing:1px; color:var(--cyan); opacity:0; transition:all .35s;
+    white-space:nowrap; pointer-events:none;
+  }
+  #toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+  #toast.err{color:#ff6d6d; border-color:rgba(255,109,109,0.4);}
+
+  #settings-btn{
+    position:fixed; z-index:20; pointer-events:auto;
+    top:calc(env(safe-area-inset-top,0px) + 14px); right:14px;
+    width:30px; height:30px; display:flex; align-items:center; justify-content:center;
+    color:var(--cyan); opacity:0.55;
+  }
+  #settings-btn svg{width:16px; height:16px;}
+  #settings-btn:active{opacity:1;}
+
+  #key-modal{
+    position:fixed; inset:0; z-index:50; display:none;
+    align-items:center; justify-content:center;
+    background:rgba(2,6,8,0.82); backdrop-filter:blur(6px);
+    padding:24px;
+  }
+  #key-modal.show{display:flex;}
+  #key-panel{
+    width:100%; max-width:320px; background:var(--panel); border:1px solid var(--line);
+    border-radius:16px; padding:20px; box-shadow:0 0 40px rgba(77,243,255,0.12);
+  }
+  .key-title{font-size:11px; letter-spacing:3px; color:var(--cyan); text-shadow:0 0 8px rgba(77,243,255,0.5); margin-bottom:10px;}
+  .key-desc{font-size:11px; line-height:1.6; color:rgba(234,253,255,0.55); margin:0 0 16px;}
+  #key-input{
+    width:100%; background:rgba(77,243,255,0.06); border:1px solid var(--line); border-radius:10px;
+    padding:12px 14px; color:#eafdff; font-family:inherit; font-size:15px; outline:none; margin-bottom:14px;
+  }
+  #key-input::placeholder{color:rgba(77,243,255,0.3);}
+  .key-actions{display:flex; flex-direction:column; gap:14px;}
+  #key-link{font-size:10px; letter-spacing:0.5px; color:var(--amber); text-decoration:none; opacity:0.85;}
+  .key-buttons{display:flex; gap:10px;}
+  .key-btn{
+    flex:1; text-align:center; padding:11px; border-radius:10px; font-size:11px; letter-spacing:1.5px;
+    background:var(--cyan); color:#022; font-weight:600;
+  }
+  .key-btn.ghost{background:transparent; border:1px solid var(--line); color:var(--cyan); font-weight:400;}
+  .key-btn:active{opacity:0.7;}
+</style>
+</head>
+<body>
+
+<div id="canvas-wrap"></div>
+<div id="overlay"></div>
+<div id="noise-flicker"></div>
+<div class="bracket tl"></div>
+<div class="bracket tr"></div>
+<div class="bracket bl"></div>
+<div class="bracket br"></div>
+<div id="load-bar"></div>
+<div id="toast"></div>
+
+<div id="hud-top">
+  <div class="brand">HOLO<small>PROIETTORE V1</small></div>
+  <div class="status"><span class="dot"></span>SISTEMA ATTIVO<br><span id="fps-counter">-- fps</span></div>
+</div>
+
+<div id="settings-btn" title="Chiave API">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+</div>
+
+<div id="key-modal">
+  <div id="key-panel">
+    <div class="key-title">CHIAVE API GROQ</div>
+    <p class="key-desc">Serve una chiave API Groq per generare gli ologrammi. Viene salvata solo su questo dispositivo.</p>
+    <input id="key-input" type="password" placeholder="gsk_..." autocomplete="off" autocapitalize="off" spellcheck="false">
+    <div class="key-actions">
+      <a href="https://console.groq.com/keys" target="_blank" id="key-link">Ottieni una chiave →</a>
+      <div class="key-buttons">
+        <div class="key-btn ghost" id="key-cancel">Annulla</div>
+        <div class="key-btn" id="key-save">Salva</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="obj-label"><div class="name" id="obj-name">—</div><div class="meta" id="obj-meta">—</div></div>
+
+<div id="empty-state">
+  <div class="ring"></div>
+  <h1>NESSUN OGGETTO CARICATO</h1>
+  <p>Scrivi una descrizione qui sotto per proiettare il tuo primo ologramma</p>
+</div>
+
+<div id="obj-actions">
+  <div class="act-btn" id="reset-view-btn" title="Reset vista">
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+  </div>
+  <div class="act-btn" id="wire-toggle-btn" title="Modalità resa">
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>
+  </div>
+  <div class="act-btn" id="clear-btn" title="Nuovo oggetto">
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+  </div>
+</div>
+
+<div id="console">
+  <div class="mode-tabs" id="mode-tabs" style="display:none;">
+    <div class="mode-tab active" data-mode="new">NUOVO</div>
+    <div class="mode-tab" data-mode="edit">MODIFICA</div>
+  </div>
+  <div class="quick-row" id="quick-row">
+    <div class="chip" data-p="Un pianeta con anelli e lune in orbita">Pianeta con anelli</div>
+    <div class="chip" data-p="Una molecola di DNA a doppia elica">DNA a elica</div>
+    <div class="chip" data-p="Una nave spaziale futuristica con motori laterali">Nave spaziale</div>
+    <div class="chip" data-p="Un cristallo geometrico sfaccettato che levita">Cristallo</div>
+    <div class="chip" data-p="Un robot umanoide stilizzato">Robot</div>
+    <div class="chip" data-p="La struttura atomica del carbonio">Atomo</div>
+  </div>
+  <div class="input-bar" id="input-bar">
+    <input id="prompt-input" type="text" placeholder="Descrivi un oggetto da proiettare..." autocomplete="off">
+    <div id="send-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---------- three.js scene setup ---------- */
+  const wrap = document.getElementById('canvas-wrap');
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 100);
+  camera.position.set(0, 1.4, 6.5);
+
+  const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  wrap.appendChild(renderer.domElement);
+
+  // holographic base grid (floor)
+  const gridGroup = new THREE.Group();
+  const grid = new THREE.GridHelper(14, 28, 0x1c5f66, 0x0d2f33);
+  grid.position.y = -1.8;
+  gridGroup.add(grid);
+  const ring1 = new THREE.Mesh(
+    new THREE.RingGeometry(1.6, 1.63, 64),
+    new THREE.MeshBasicMaterial({color:0x4df3ff, transparent:true, opacity:0.35, side:THREE.DoubleSide})
+  );
+  ring1.rotation.x = -Math.PI/2; ring1.position.y = -1.79;
+  const ring2 = new THREE.Mesh(
+    new THREE.RingGeometry(2.0, 2.02, 64),
+    new THREE.MeshBasicMaterial({color:0x4df3ff, transparent:true, opacity:0.18, side:THREE.DoubleSide})
+  );
+  ring2.rotation.x = -Math.PI/2; ring2.position.y = -1.79;
+  gridGroup.add(ring1, ring2);
+  scene.add(gridGroup);
+
+  // ambient particles
+  const particleGeo = new THREE.BufferGeometry();
+  const pCount = 200;
+  const pPos = new Float32Array(pCount*3);
+  for(let i=0;i<pCount;i++){
+    pPos[i*3] = (Math.random()-0.5)*12;
+    pPos[i*3+1] = Math.random()*6-1.8;
+    pPos[i*3+2] = (Math.random()-0.5)*12;
+  }
+  particleGeo.setAttribute('position', new THREE.BufferAttribute(pPos,3));
+  const particleMat = new THREE.PointsMaterial({color:0x4df3ff, size:0.02, transparent:true, opacity:0.4});
+  const particles = new THREE.Points(particleGeo, particleMat);
+  scene.add(particles);
+
+  scene.add(new THREE.AmbientLight(0x224a4f, 1.2));
+  const pointLight = new THREE.PointLight(0x4df3ff, 1.4, 20);
+  pointLight.position.set(2,3,2);
+  scene.add(pointLight);
+
+  let objectGroup = null;       // current holographic object
+  let wireMode = true;
+  let autoRotate = true;
+  let currentSpec = null;       // last JSON spec, for edit continuity
+
+  /* ---------- camera orbit controls (manual, r128-safe) ---------- */
+  let theta = 0.5, phi = 1.15, radius = 6.5;
+  const target = new THREE.Vector3(0, 0.2, 0);
+  let dragging = false, lastX=0, lastY=0;
+  let pinchDist = null;
+
+  function updateCamera(){
+    camera.position.x = target.x + radius * Math.sin(phi) * Math.sin(theta);
+    camera.position.z = target.z + radius * Math.sin(phi) * Math.cos(theta);
+    camera.position.y = target.y + radius * Math.cos(phi);
+    camera.lookAt(target);
+  }
+  updateCamera();
+
+  function onDown(x,y){ dragging = true; lastX = x; lastY = y; autoRotate = false; }
+  function onMove(x,y){
+    if(!dragging) return;
+    const dx = x - lastX, dy = y - lastY;
+    theta -= dx * 0.006;
+    phi -= dy * 0.006;
+    phi = Math.max(0.35, Math.min(Math.PI-0.35, phi));
+    lastX = x; lastY = y;
+    updateCamera();
+  }
+  function onUp(){ dragging = false; }
+
+  renderer.domElement.addEventListener('mousedown', e=>onDown(e.clientX,e.clientY));
+  window.addEventListener('mousemove', e=>onMove(e.clientX,e.clientY));
+  window.addEventListener('mouseup', onUp);
+  renderer.domElement.addEventListener('wheel', e=>{
+    radius += e.deltaY * 0.003;
+    radius = Math.max(2.5, Math.min(14, radius));
+    updateCamera();
+    e.preventDefault();
+  }, {passive:false});
+
+  renderer.domElement.addEventListener('touchstart', e=>{
+    if(e.touches.length===1){ onDown(e.touches[0].clientX, e.touches[0].clientY); }
+    else if(e.touches.length===2){
+      pinchDist = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+    }
+  }, {passive:true});
+  renderer.domElement.addEventListener('touchmove', e=>{
+    if(e.touches.length===1){ onMove(e.touches[0].clientX, e.touches[0].clientY); }
+    else if(e.touches.length===2){
+      const d = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+      if(pinchDist){
+        radius -= (d - pinchDist) * 0.01;
+        radius = Math.max(2.5, Math.min(14, radius));
+        updateCamera();
+      }
+      pinchDist = d;
+    }
+    e.preventDefault();
+  }, {passive:false});
+  renderer.domElement.addEventListener('touchend', e=>{ dragging=false; pinchDist=null; });
+
+  window.addEventListener('resize', ()=>{
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  /* ---------- holographic material helpers ---------- */
+  const HOLO_COLOR_DEFAULT = 0x4df3ff;
+
+  function makeMaterial(hex, wire){
+    const color = new THREE.Color(hex || HOLO_COLOR_DEFAULT);
+    if(wire){
+      return new THREE.MeshBasicMaterial({color, wireframe:true, transparent:true, opacity:0.85});
+    }
+    return new THREE.MeshPhongMaterial({
+      color, transparent:true, opacity:0.28, emissive:color, emissiveIntensity:0.5,
+      side:THREE.DoubleSide, shininess:80
+    });
+  }
+
+  function addEdgeGlow(mesh, geo, hex){
+    const edges = new THREE.EdgesGeometry(geo);
+    const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({color: hex || HOLO_COLOR_DEFAULT, transparent:true, opacity:0.9}));
+    mesh.add(line);
+  }
+
+  function geometryFor(part){
+    const t = (part.type || 'box').toLowerCase();
+    const s = part.scale || [1,1,1];
+    switch(t){
+      case 'sphere': return new THREE.SphereGeometry(s[0]||0.5, 20, 16);
+      case 'box': return new THREE.BoxGeometry(s[0]||1, s[1]||1, s[2]||1);
+      case 'cone': return new THREE.ConeGeometry(s[0]||0.5, s[1]||1, 20);
+      case 'cylinder': return new THREE.CylinderGeometry(s[0]||0.5, s[1]||s[0]||0.5, s[2]||1, 20);
+      case 'torus': return new THREE.TorusGeometry(s[0]||0.6, s[1]||0.15, 12, 36);
+      case 'octahedron': return new THREE.OctahedronGeometry(s[0]||0.6, 0);
+      case 'icosahedron': return new THREE.IcosahedronGeometry(s[0]||0.6, 0);
+      case 'dodecahedron': return new THREE.DodecahedronGeometry(s[0]||0.6, 0);
+      case 'tetrahedron': return new THREE.TetrahedronGeometry(s[0]||0.6, 0);
+      case 'ring': return new THREE.RingGeometry((s[0]||0.5)*0.6, s[0]||0.5, 32);
+      case 'torusknot': return new THREE.TorusKnotGeometry(s[0]||0.5, s[1]||0.15, 64, 8);
+      case 'plane': return new THREE.PlaneGeometry(s[0]||1, s[1]||1);
+      default: return new THREE.BoxGeometry(s[0]||1, s[1]||1, s[2]||1);
+    }
+  }
+
+  function buildObject(spec){
+    const group = new THREE.Group();
+    (spec.parts || []).forEach(part=>{
+      const geo = geometryFor(part);
+      const mat = makeMaterial(part.color, wireMode);
+      const mesh = new THREE.Mesh(geo, mat);
+      if(part.position) mesh.position.set(part.position[0]||0, part.position[1]||0, part.position[2]||0);
+      if(part.rotation) mesh.rotation.set(part.rotation[0]||0, part.rotation[1]||0, part.rotation[2]||0);
+      if(!wireMode) addEdgeGlow(mesh, geo, part.color);
+      group.add(mesh);
+    });
+    // orbiting children support
+    (spec.orbits || []).forEach(orb=>{
+      const pivot = new THREE.Group();
+      const geo = geometryFor(orb);
+      const mat = makeMaterial(orb.color, wireMode);
+      const mesh = new THREE.Mesh(geo, mat);
+      const dist = orb.distance || 1.5;
+      mesh.position.set(dist, orb.y || 0, 0);
+      if(!wireMode) addEdgeGlow(mesh, geo, orb.color);
+      pivot.add(mesh);
+      pivot.userData.spin = (orb.speed || 0.4);
+      pivot.rotation.y = Math.random()*Math.PI*2;
+      group.add(pivot);
+      group.userData.orbitPivots = group.userData.orbitPivots || [];
+      group.userData.orbitPivots.push(pivot);
+    });
+    return group;
+  }
+
+  function loadSpec(spec){
+    if(objectGroup) scene.remove(objectGroup);
+    currentSpec = spec;
+    objectGroup = buildObject(spec);
+    objectGroup.scale.setScalar(0.001);
+    scene.add(objectGroup);
+    // pop-in animation
+    let t = 0;
+    const target_scale = spec.scale || 1;
+    (function grow(){
+      t += 0.06;
+      const s = Math.min(t,1);
+      const eased = 1 - Math.pow(1-s, 3);
+      objectGroup.scale.setScalar(target_scale * eased);
+      if(s<1) requestAnimationFrame(grow);
+    })();
+
+    document.getElementById('empty-state').classList.add('hidden');
+    document.getElementById('obj-actions').classList.add('show');
+    document.getElementById('mode-tabs').style.display = 'flex';
+    setModeTab('edit');
+    document.getElementById('obj-name').textContent = (spec.name || 'OGGETTO').toUpperCase();
+    document.getElementById('obj-meta').textContent = (spec.meta || (spec.parts ? spec.parts.length + ' COMPONENTI' : ''));
+    const lbl = document.getElementById('obj-label');
+    lbl.classList.add('show');
+    autoRotate = true;
+  }
+
+  function clearObject(){
+    if(objectGroup) scene.remove(objectGroup);
+    objectGroup = null;
+    currentSpec = null;
+    document.getElementById('empty-state').classList.remove('hidden');
+    document.getElementById('obj-actions').classList.remove('show');
+    document.getElementById('mode-tabs').style.display = 'none';
+    document.getElementById('obj-label').classList.remove('show');
+    setModeTab('new');
+  }
+
+  /* ---------- render loop ---------- */
+  let lastFrame = performance.now(), frames=0, fpsAcc=0;
+  function animate(){
+    requestAnimationFrame(animate);
+    const now = performance.now();
+    const dt = (now-lastFrame)/1000; lastFrame = now;
+    frames++; fpsAcc += dt;
+    if(fpsAcc>0.5){ document.getElementById('fps-counter').textContent = Math.round(frames/fpsAcc)+' fps'; frames=0; fpsAcc=0; }
+
+    if(objectGroup){
+      if(autoRotate) objectGroup.rotation.y += dt*0.25;
+      if(objectGroup.userData.orbitPivots){
+        objectGroup.userData.orbitPivots.forEach(p=>{ p.rotation.y += dt * p.userData.spin; });
+      }
+      objectGroup.position.y = Math.sin(now*0.0006)*0.08;
+    }
+    particles.rotation.y += dt*0.01;
+    gridGroup.rotation.y += dt*0.008;
+
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  /* ---------- Claude API integration ---------- */
+  const SYSTEM_PROMPT = `Sei un generatore di oggetti 3D olografici per un'app. Ricevi la descrizione testuale di un oggetto (in italiano) e devi rispondere SOLO con un oggetto JSON valido, senza testo aggiuntivo, senza markdown, senza backtick.
+
+Formato JSON richiesto:
+{
+  "name": "nome breve dell'oggetto (max 3 parole, in italiano)",
+  "meta": "breve descrizione tecnica stile HUD (es. '4 COMPONENTI • SIMMETRIA RADIALE')",
+  "scale": numero tra 0.6 e 1.8 (dimensione complessiva),
+  "parts": [
+    {
+      "type": "sphere|box|cone|cylinder|torus|octahedron|icosahedron|dodecahedron|tetrahedron|ring|torusknot|plane",
+      "position": [x,y,z],
+      "rotation": [x,y,z] (radianti, opzionale),
+      "scale": [a,b,c] (parametri dimensione specifici del tipo di geometria),
+      "color": "#rrggbb"
+    }
+  ],
+  "orbits": [
+    {
+      "type": "sphere|box|torus|...",
+      "distance": numero (raggio orbita),
+      "y": numero (altezza),
+      "speed": numero (velocità rotazione, 0.1-1.5),
+      "scale": [a,b,c],
+      "color": "#rrggbb"
+    }
+  ]
+}
+
+Regole:
+- Usa "orbits" SOLO per elementi che ruotano attorno all'oggetto centrale (lune, elettroni, satelliti). Altrimenti ometti il campo o lascialo vuoto.
+- Componi oggetti riconoscibili combinando 3-12 primitive geometriche posizionate con cura.
+- Usa colori coerenti con un'estetica olografica: preferisci ciano (#4df3ff), blu (#3d7fff), ambra (#ffb84d), viola (#a86dff), verde acqua (#4dffb8). Puoi usare più colori nello stesso oggetto se ha senso.
+- Le posizioni devono creare una forma riconoscibile e centrata approssimativamente sull'origine [0,0,0].
+- Se l'utente chiede una MODIFICA di un oggetto esistente, riceverai anche lo stato JSON attuale: modifica solo ciò che serve, mantenendo il resto coerente, e restituisci comunque il JSON completo aggiornato.
+- Rispondi SEMPRE e SOLO con il JSON, nient'altro.`;
+
+  const GROQ_KEY_STORAGE = 'holo_groq_api_key';
+  const GROQ_MODEL = 'llama-3.3-70b-versatile';
+
+  function getGroqKey(){
+    try{ return localStorage.getItem(GROQ_KEY_STORAGE) || ''; }catch(e){ return ''; }
+  }
+  function setGroqKey(k){
+    try{ localStorage.setItem(GROQ_KEY_STORAGE, k); }catch(e){}
+  }
+
+  async function callGroq(userText, existingSpec){
+    const key = getGroqKey();
+    if(!key) throw new Error('NO_KEY');
+
+    let userMsg = userText;
+    if(existingSpec){
+      userMsg = `Oggetto attuale (JSON): ${JSON.stringify(existingSpec)}\n\nIstruzione di modifica: ${userText}`;
+    }
+
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + key
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userMsg }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.8,
+        max_tokens: 2000
+      })
+    });
+
+    if(response.status === 401){
+      throw new Error('BAD_KEY');
+    }
+    if(!response.ok){
+      throw new Error('Errore API: ' + response.status);
+    }
+    const data = await response.json();
+    const raw = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+    if(!raw) throw new Error('Risposta vuota');
+    const cleaned = raw.trim().replace(/^```json\s*/i,'').replace(/^```\s*/,'').replace(/```\s*$/,'');
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if(!jsonMatch) throw new Error('JSON non trovato nella risposta');
+    return JSON.parse(jsonMatch[0]);
+  }
+
+  /* ---------- UI wiring ---------- */
+  const input = document.getElementById('prompt-input');
+  const sendBtn = document.getElementById('send-btn');
+  const inputBar = document.getElementById('input-bar');
+  const loadBar = document.getElementById('load-bar');
+  const toast = document.getElementById('toast');
+
+  let mode = 'new';
+  function setModeTab(m){
+    mode = m;
+    document.querySelectorAll('.mode-tab').forEach(el=>{
+      el.classList.toggle('active', el.dataset.mode===m);
+    });
+    input.placeholder = m==='edit' ? 'Descrivi la modifica da apportare...' : 'Descrivi un oggetto da proiettare...';
+  }
+  document.querySelectorAll('.mode-tab').forEach(el=>{
+    el.addEventListener('click', ()=>setModeTab(el.dataset.mode));
+  });
+
+  function showToast(msg, isErr){
+    toast.textContent = msg;
+    toast.classList.toggle('err', !!isErr);
+    toast.classList.add('show');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(()=>toast.classList.remove('show'), 2600);
+  }
+
+  let busy = false;
+  function setBusy(b){
+    busy = b;
+    inputBar.classList.toggle('busy', b);
+    sendBtn.classList.toggle('disabled', b);
+    if(b){
+      loadBar.style.width = '0%';
+      loadBar.style.transition = 'none';
+      requestAnimationFrame(()=>{
+        loadBar.style.transition = 'width 3.5s cubic-bezier(.1,.6,.3,1)';
+        loadBar.style.width = '85%';
+      });
+    } else {
+      loadBar.style.transition = 'width 0.2s';
+      loadBar.style.width = '100%';
+      setTimeout(()=>{ loadBar.style.transition='none'; loadBar.style.width='0%'; }, 250);
+    }
+  }
+
+  let pendingText = null;
+
+  async function handleSubmit(){
+    const text = input.value.trim();
+    if(!text || busy) return;
+
+    if(!getGroqKey()){
+      pendingText = text;
+      openKeyModal();
+      return;
+    }
+
+    setBusy(true);
+    try{
+      const useEdit = mode==='edit' && currentSpec;
+      const spec = await callGroq(text, useEdit ? currentSpec : null);
+      loadSpec(spec);
+      input.value = '';
+    }catch(err){
+      console.error(err);
+      if(err.message === 'BAD_KEY'){
+        showToast('Chiave API non valida', true);
+        openKeyModal();
+      } else if(err.message === 'NO_KEY'){
+        openKeyModal();
+      } else {
+        showToast('Errore generazione: riprova', true);
+      }
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  /* ---------- key modal ---------- */
+  const keyModal = document.getElementById('key-modal');
+  const keyInput = document.getElementById('key-input');
+
+  function openKeyModal(){
+    keyInput.value = getGroqKey();
+    keyModal.classList.add('show');
+    setTimeout(()=>keyInput.focus(), 100);
+  }
+  function closeKeyModal(){
+    keyModal.classList.remove('show');
+  }
+
+  document.getElementById('settings-btn').addEventListener('click', ()=>{
+    pendingText = null;
+    openKeyModal();
+  });
+  document.getElementById('key-cancel').addEventListener('click', ()=>{
+    pendingText = null;
+    closeKeyModal();
+  });
+  document.getElementById('key-save').addEventListener('click', ()=>{
+    const k = keyInput.value.trim();
+    if(!k){ showToast('Inserisci una chiave valida', true); return; }
+    setGroqKey(k);
+    closeKeyModal();
+    showToast('CHIAVE SALVATA');
+    if(pendingText){
+      input.value = pendingText;
+      pendingText = null;
+      handleSubmit();
+    }
+  });
+  keyInput.addEventListener('keydown', e=>{
+    if(e.key==='Enter'){ e.preventDefault(); document.getElementById('key-save').click(); }
+  });
+
+  sendBtn.addEventListener('click', handleSubmit);
+  input.addEventListener('keydown', e=>{
+    if(e.key==='Enter'){ e.preventDefault(); handleSubmit(); }
+  });
+
+  document.querySelectorAll('.chip').forEach(chip=>{
+    chip.addEventListener('click', ()=>{
+      input.value = chip.dataset.p;
+      setModeTab('new');
+      handleSubmit();
+    });
+  });
+
+  document.getElementById('clear-btn').addEventListener('click', clearObject);
+  document.getElementById('reset-view-btn').addEventListener('click', ()=>{
+    theta=0.5; phi=1.15; radius=6.5; updateCamera(); autoRotate = true;
+  });
+  document.getElementById('wire-toggle-btn').addEventListener('click', ()=>{
+    wireMode = !wireMode;
+    if(currentSpec) loadSpec(currentSpec);
+    showToast(wireMode ? 'MODALITÀ WIREFRAME' : 'MODALITÀ SOLIDA');
+  });
+
+})();
+</script>
+</body>
+</html>
