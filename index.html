@@ -588,17 +588,16 @@ Regole:
 
   const GROQ_KEY_STORAGE = 'holo_groq_api_key';
   const GROQ_MODEL = 'llama-3.3-70b-versatile';
+  let runtimeGroqKey = '';
 
   function getGroqKey(){
+    if(runtimeGroqKey) return runtimeGroqKey;
     try{ return localStorage.getItem(GROQ_KEY_STORAGE) || ''; }catch(e){ return ''; }
   }
   function setGroqKey(k){
-    try{
-      localStorage.setItem(GROQ_KEY_STORAGE, k);
-      return localStorage.getItem(GROQ_KEY_STORAGE) === k;
-    }catch(e){
-      return false;
-    }
+    runtimeGroqKey = k;
+    try{ localStorage.setItem(GROQ_KEY_STORAGE, k); }catch(e){}
+    return true;
   }
 
   async function callGroq(userText, existingSpec){
@@ -752,11 +751,7 @@ Regole:
   document.getElementById('key-save').addEventListener('click', ()=>{
     const k = keyInput.value.replace(/\s+/g, '');
     if(!k){ showToast('Inserisci una chiave valida', true); return; }
-    const ok = setGroqKey(k);
-    if(!ok){
-      showToast('Impossibile salvare: apri in Safari', true);
-      return;
-    }
+    setGroqKey(k);
     closeKeyModal();
     showToast('CHIAVE SALVATA');
     if(pendingText){
