@@ -177,7 +177,7 @@
     position:fixed; top:calc(env(safe-area-inset-top,0px) + 50px); left:50%; transform:translateX(-50%) translateY(-10px);
     z-index:40; background:rgba(6,18,22,0.9); border:1px solid var(--line); border-radius:10px;
     padding:9px 16px; font-size:10px; letter-spacing:1px; color:var(--cyan); opacity:0; transition:all .35s;
-    white-space:nowrap; pointer-events:none;
+    max-width:82vw; text-align:center; pointer-events:none;
   }
   #toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
   #toast.err{color:#ff6d6d; border-color:rgba(255,109,109,0.4);}
@@ -629,10 +629,16 @@ Regole:
     });
 
     if(response.status === 401){
-      throw new Error('BAD_KEY');
+      let detail = '';
+      try{ const errBody = await response.json(); detail = (errBody.error && errBody.error.message) || ''; }catch(e){}
+      const e = new Error('BAD_KEY');
+      e.detail = detail;
+      throw e;
     }
     if(!response.ok){
-      throw new Error('Errore API: ' + response.status);
+      let detail = '';
+      try{ const errBody = await response.json(); detail = (errBody.error && errBody.error.message) || ''; }catch(e){}
+      throw new Error('Errore API ' + response.status + (detail ? ': ' + detail : ''));
     }
     const data = await response.json();
     const raw = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
@@ -667,7 +673,7 @@ Regole:
     toast.classList.toggle('err', !!isErr);
     toast.classList.add('show');
     clearTimeout(showToast._t);
-    showToast._t = setTimeout(()=>toast.classList.remove('show'), 2600);
+    showToast._t = setTimeout(()=>toast.classList.remove('show'), isErr ? 5000 : 2600);
   }
 
   let busy = false;
@@ -710,12 +716,12 @@ Regole:
     }catch(err){
       console.error(err);
       if(err.message === 'BAD_KEY'){
-        showToast('Chiave API non valida', true);
+        showToast(err.detail ? ('Chiave rifiutata: ' + err.detail) : 'Chiave API non valida', true);
         openKeyModal();
       } else if(err.message === 'NO_KEY'){
         openKeyModal();
       } else {
-        showToast('Errore generazione: riprova', true);
+        showToast(err.message || 'Errore generazione: riprova', true);
       }
     }finally{
       setBusy(false);
@@ -744,7 +750,7 @@ Regole:
     closeKeyModal();
   });
   document.getElementById('key-save').addEventListener('click', ()=>{
-    const k = keyInput.value.trim();
+    const k = keyInput.value.replace(/\s+/g, '');
     if(!k){ showToast('Inserisci una chiave valida', true); return; }
     const ok = setGroqKey(k);
     if(!ok){
