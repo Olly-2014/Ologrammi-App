@@ -621,10 +621,7 @@
   animate();
 
   /* ---------- Claude API integration ---------- */
-  const SYSTEM_PROMPT = `Sei un generatore di oggetti 3D olografici per un'app. Ricevi la descrizione testuale di un oggetto (in italiano) e devi rispondere SOLO con un oggetto JSON valido, senza testo aggiuntivo, senza markdown, senza backtick.
-
-Formato JSON richiesto:
-{
+  const GENERIC_FORMAT_DOC = `{
   "name": "nome breve dell'oggetto (max 3 parole, in italiano)",
   "meta": "breve descrizione tecnica stile HUD (es. '4 COMPONENTI • SIMMETRIA RADIALE')",
   "scale": numero tra 0.6 e 1.8 (dimensione complessiva),
@@ -647,24 +644,58 @@ Formato JSON richiesto:
       "color": "#rrggbb"
     }
   ]
-}
+}`;
+
+  // Prompt usato per MODIFICARE un oggetto già esistente (sempre in formato "parts")
+  const SYSTEM_PROMPT_EDIT = `Sei un editor di oggetti 3D olografici. Ricevi il JSON di un oggetto esistente (formato "parts"/"orbits") e un'istruzione di modifica in italiano. Rispondi SOLO con il JSON completo aggiornato, stesso formato, nessun testo extra, nessun markdown, nessun backtick.
+
+Formato:
+${GENERIC_FORMAT_DOC}
 
 Regole:
-- Usa "orbits" SOLO per elementi che ruotano attorno all'oggetto centrale (lune, elettroni, satelliti). Altrimenti ometti il campo o lascialo vuoto.
-- Componi oggetti riconoscibili combinando 4-14 primitive geometriche posizionate con cura, come se costruissi un modellino con mattoncini.
-- MAI sovrapporre due parti grandi nello stesso punto (es. due sfere enormi centrate sull'origine): ogni parte occupa una posizione distinta che riflette la struttura reale del soggetto.
-- Se il soggetto è una figura umanoide/robot/personaggio/animale bipede: costruiscilo con una gerarchia anatomica chiara lungo l'asse Y verticale:
-  - testa/elmo: una forma piccola (sphere/box) in cima, es. y≈1.3-1.6
-  - torso: una forma centrale (box/cylinder) sotto la testa, es. y≈0.3-0.9
-  - due braccia: cilindri sottili ai lati del torso, es. x≈±0.6, y≈0.3-0.7
-  - due gambe: cilindri sotto il torso, es. x≈±0.25, y da -1.3 a 0
-  - eventuali mani/piedi: piccole forme alle estremità di braccia/gambe
-  - Ogni arto/parte deve avere proporzioni realistiche (più stretto e lungo per arti, più largo per il torso), MAI la stessa scala di torso e testa.
-- Se il soggetto è un oggetto non vivente (veicolo, cristallo, pianeta, molecola...): componilo comunque con parti di dimensioni e posizioni differenziate, non ripetute nello stesso punto.
-- Usa colori coerenti con un'estetica olografica: preferisci ciano (#4df3ff), blu (#3d7fff), ambra (#ffb84d), viola (#a86dff), verde acqua (#4dffb8). Puoi usare più colori nello stesso oggetto se ha senso (es. dettagli in colore diverso dal corpo principale).
-- Le posizioni devono creare una forma riconoscibile e centrata approssimativamente sull'origine [0,0,0].
-- Se l'utente chiede una MODIFICA di un oggetto esistente, riceverai anche lo stato JSON attuale: modifica solo ciò che serve, mantenendo il resto coerente, e restituisci comunque il JSON completo aggiornato.
-- Rispondi SEMPRE e SOLO con il JSON, nient'altro.`;
+- Modifica solo ciò che l'istruzione richiede, mantenendo il resto coerente con l'oggetto originale.
+- Non stravolgere posizioni/proporzioni di parti non menzionate nell'istruzione.
+- Rispondi SEMPRE e SOLO con il JSON.`;
+
+  // Prompt usato per una NUOVA generazione: il modello sceglie l'archetipo
+  const SYSTEM_PROMPT_NEW = `Sei un generatore di oggetti 3D olografici per un'app. Ricevi la descrizione testuale di un oggetto (in italiano) e devi rispondere SOLO con un oggetto JSON valido, senza testo aggiuntivo, senza markdown, senza backtick.
+
+Prima di tutto classifica il soggetto in uno di due ARCHETIPI e usa il formato corrispondente:
+
+ARCHETIPO "humanoid" — usa questo se il soggetto è una persona, un supereroe, un robot/androide bipede, un alieno umanoide, un animale antropomorfo bipede o qualsiasi personaggio con testa/busto/braccia/gambe. Lo scheletro anatomico viene costruito automaticamente dal sistema (NON devi calcolare tu le posizioni): tu scegli solo forme, colori e accessori.
+Formato:
+{
+  "archetype": "humanoid",
+  "name": "nome breve (max 3 parole)",
+  "meta": "descrizione tecnica stile HUD",
+  "scale": numero tra 0.7 e 1.3,
+  "headType": "sphere" | "box",
+  "torsoType": "box" | "cylinder",
+  "primaryColor": "#rrggbb" (colore principale busto/testa),
+  "secondaryColor": "#rrggbb" (colore arti),
+  "accentColor": "#rrggbb" (colore dettagli/accessori),
+  "accessories": [
+    {
+      "anchor": "head|chest|leftShoulder|rightShoulder|back|leftHand|rightHand|waist",
+      "type": "box|cone|sphere|cylinder|torus|octahedron",
+      "scale": [a,b,c],
+      "color": "#rrggbb"
+    }
+  ] (0-6 accessori opzionali per dettagli caratteristici, es. repulsori, elmo, mantello, spalline, armi)
+}
+
+ARCHETIPO "generic" — usa questo per QUALSIASI altro soggetto non bipede (pianeti, molecole, veicoli, cristalli, edifici, oggetti astratti...).
+Formato:
+{
+  "archetype": "generic",
+  ${GENERIC_FORMAT_DOC.split('\n').join('\n  ')}
+}
+
+Regole generali:
+- Usa "orbits" (solo in formato generic) SOLO per elementi che ruotano attorno al centro (lune, elettroni, satelliti).
+- MAI sovrapporre due parti grandi nello stesso punto: ogni parte occupa una posizione distinta e riconoscibile.
+- Usa colori coerenti con un'estetica olografica: ciano (#4df3ff), blu (#3d7fff), ambra (#ffb84d), viola (#a86dff), verde acqua (#4dffb8), oppure colori tematici del soggetto (es. rosso/oro per Iron Man) se ha più senso.
+- Rispondi SEMPRE e SOLO con il JSON dell'archetipo scelto, nient'altro.`;
 
   const PART_EDIT_SYSTEM_PROMPT = `Sei un editor di singole parti di un oggetto 3D olografico. Ricevi il JSON di UNA SOLA parte e un'istruzione di modifica in italiano. Rispondi SOLO con il JSON aggiornato di quella parte, stesso formato, nessun testo extra, nessun markdown.
 
@@ -678,6 +709,80 @@ Formato:
 }
 
 Modifica solo gli attributi richiesti dall'istruzione, mantenendo gli altri invariati. Rispondi SEMPRE e SOLO con il JSON della parte.`;
+
+  /* ---------- procedural humanoid skeleton (deterministic, always anatomically correct) ---------- */
+  const HUMANOID_ANCHORS = {
+    head:         [0, 1.05, 0],
+    chest:        [0, 0.15, 0.2],
+    leftShoulder: [-0.5, 0.5, 0],
+    rightShoulder:[0.5, 0.5, 0],
+    back:         [0, 0.15, -0.22],
+    leftHand:     [-0.58, -0.55, 0],
+    rightHand:    [0.58, -0.55, 0],
+    waist:        [0, -0.28, 0.16]
+  };
+
+  function synthesizeHumanoidParts(spec){
+    const primary = spec.primaryColor || '#4df3ff';
+    const secondary = spec.secondaryColor || '#3d7fff';
+    const accent = spec.accentColor || '#ffb84d';
+    const headType = (spec.headType === 'box') ? 'box' : 'sphere';
+    const torsoType = (spec.torsoType === 'cylinder') ? 'cylinder' : 'box';
+
+    const parts = [
+      // head
+      { type: headType, position:[0,1.05,0], scale: headType==='box' ? [0.34,0.34,0.34] : [0.26,0,0], color: primary },
+      // torso
+      { type: torsoType, position:[0,0.3,0], scale: torsoType==='box' ? [0.56,0.72,0.32] : [0.3,0.3,0.75], color: primary },
+      // hips
+      { type:'box', position:[0,-0.28,0], scale:[0.48,0.22,0.3], color: primary },
+      // left upper arm
+      { type:'cylinder', position:[-0.5,0.5,0], rotation:[0,0,0.55], scale:[0.09,0.09,0.42], color: secondary },
+      // left forearm
+      { type:'cylinder', position:[-0.62,0.12,0], rotation:[0,0,0.15], scale:[0.085,0.085,0.4], color: secondary },
+      // left hand
+      { type:'sphere', position:[-0.66,-0.16,0], scale:[0.1,0,0], color: accent },
+      // right upper arm
+      { type:'cylinder', position:[0.5,0.5,0], rotation:[0,0,-0.55], scale:[0.09,0.09,0.42], color: secondary },
+      // right forearm
+      { type:'cylinder', position:[0.62,0.12,0], rotation:[0,0,-0.15], scale:[0.085,0.085,0.4], color: secondary },
+      // right hand
+      { type:'sphere', position:[0.66,-0.16,0], scale:[0.1,0,0], color: accent },
+      // left leg
+      { type:'cylinder', position:[-0.19,-0.72,0], scale:[0.12,0.12,0.55], color: secondary },
+      // left foot
+      { type:'box', position:[-0.19,-1.06,0.08], scale:[0.18,0.1,0.32], color: accent },
+      // right leg
+      { type:'cylinder', position:[0.19,-0.72,0], scale:[0.12,0.12,0.55], color: secondary },
+      // right foot
+      { type:'box', position:[0.19,-1.06,0.08], scale:[0.18,0.1,0.32], color: accent }
+    ];
+
+    (spec.accessories || []).slice(0,6).forEach(acc=>{
+      const anchor = HUMANOID_ANCHORS[acc.anchor] || HUMANOID_ANCHORS.chest;
+      parts.push({
+        type: acc.type || 'box',
+        position: anchor.slice(),
+        scale: acc.scale || [0.15,0.15,0.15],
+        color: acc.color || accent
+      });
+    });
+
+    return {
+      name: spec.name || 'FIGURA',
+      meta: spec.meta || (parts.length + ' COMPONENTI · UMANOIDE'),
+      scale: spec.scale || 1,
+      parts
+    };
+  }
+
+  function normalizeSpec(raw){
+    if(raw && raw.archetype === 'humanoid'){
+      return synthesizeHumanoidParts(raw);
+    }
+    // generic (or missing archetype, e.g. from edit calls) — already in parts/orbits format
+    return raw;
+  }
 
   const GROQ_KEY_STORAGE = 'holo_groq_api_key';
   const GROQ_MODEL = 'llama-3.3-70b-versatile';
@@ -738,10 +843,14 @@ Modifica solo gli attributi richiesti dall'istruzione, mantenendo gli altri inva
 
   async function callGroq(userText, existingSpec){
     let userMsg = userText;
+    let raw;
     if(existingSpec){
       userMsg = `Oggetto attuale (JSON): ${JSON.stringify(existingSpec)}\n\nIstruzione di modifica: ${userText}`;
+      raw = await groqChat(SYSTEM_PROMPT_EDIT, userMsg);
+    } else {
+      raw = await groqChat(SYSTEM_PROMPT_NEW, userMsg);
     }
-    return groqChat(SYSTEM_PROMPT, userMsg);
+    return normalizeSpec(raw);
   }
 
   async function callGroqPartEdit(partSpec, instruction){
